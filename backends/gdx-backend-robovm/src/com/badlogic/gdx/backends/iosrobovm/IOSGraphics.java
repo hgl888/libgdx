@@ -1,12 +1,12 @@
 /*******************************************************************************
  * Copyright 2011 See AUTHORS file.
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,6 +16,8 @@
 
 package com.badlogic.gdx.backends.iosrobovm;
 
+import com.badlogic.gdx.Application;
+import com.badlogic.gdx.graphics.glutils.GLVersion;
 import org.robovm.apple.coregraphics.CGRect;
 import org.robovm.apple.foundation.NSObject;
 import org.robovm.apple.glkit.GLKView;
@@ -112,9 +114,11 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 			graphics.width = (int)bounds.getWidth();
 			graphics.height = (int)bounds.getHeight();
 			graphics.makeCurrent();
-			app.listener.resize(graphics.width, graphics.height);
+			if (graphics.created) {
+				app.listener.resize(graphics.width, graphics.height);
+			}
 		}
-		
+
 		@Callback
 		@BindSelector("shouldAutorotateToInterfaceOrientation:")
 		private static boolean shouldAutorotateToInterfaceOrientation (IOSUIViewController self, Selector sel,
@@ -129,10 +133,11 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 			super(frame, context);
 		}
 	}
-	
+
 	IOSApplication app;
 	IOSInput input;
 	GL20 gl20;
+	GL30 gl30;
 	int width;
 	int height;
 	long lastFrameTime;
@@ -156,19 +161,30 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 
 	IOSApplicationConfiguration config;
 	EAGLContext context;
+	GLVersion glVersion;
 	GLKView view;
 	IOSUIViewController viewController;
 
-	public IOSGraphics (float scale, IOSApplication app, IOSApplicationConfiguration config, IOSInput input, GL20 gl20) {
+	public IOSGraphics (float scale, IOSApplication app, IOSApplicationConfiguration config, IOSInput input, boolean useGLES30) {
 		this.config = config;
 
 		final CGRect bounds = app.getBounds();
 		// setup view and OpenGL
 		width = (int)bounds.getWidth();
 		height = (int)bounds.getHeight();
-		this.gl20 = gl20;
 
-		context = new EAGLContext(EAGLRenderingAPI.OpenGLES2);
+		if (useGLES30) {
+			context = new EAGLContext(EAGLRenderingAPI.OpenGLES3);
+			if (context != null)
+				gl20 = gl30 = new IOSGLES30();
+			else
+				Gdx.app.log("IOGraphics", "OpenGL ES 3.0 not supported, falling back on 2.0");
+		}
+		if (context == null) {
+			context = new EAGLContext(EAGLRenderingAPI.OpenGLES2);
+			gl20 = new IOSGLES20();
+			gl30 = null;
+		}
 
 		view = new GLKView(new CGRect(0, 0, bounds.getWidth(), bounds.getHeight()), context) {
 			@Method(selector = "touchesBegan:withEvent:")
@@ -235,7 +251,6 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 			samples = 4;
 		}
 		bufferFormat = new BufferFormat(r, g, b, a, depth, stencil, samples, false);
-		this.gl20 = gl20;
 
 		String machineString = HWMachine.getMachineString();
 		IOSDevice device = IOSDevice.getDevice(machineString);
@@ -292,6 +307,12 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 
 		if (!created) {
 			gl20.glViewport(0, 0, width, height);
+
+			String versionString = gl20.glGetString(GL20.GL_VERSION);
+			String vendorString = gl20.glGetString(GL20.GL_VENDOR);
+			String rendererString = gl20.glGetString(GL20.GL_RENDERER);
+			glVersion = new GLVersion(Application.ApplicationType.iOS, versionString, vendorString, rendererString);
+
 			app.listener.create();
 			app.listener.resize(width, height);
 			created = true;
@@ -350,7 +371,7 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 	public int getHeight () {
 		return height;
 	}
-	
+
 	@Override
 	public int getBackBufferWidth() {
 		return width;
@@ -379,6 +400,11 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 	@Override
 	public GraphicsType getType () {
 		return GraphicsType.iOSGL;
+	}
+
+	@Override
+	public GLVersion getGLVersion () {
+		return glVersion;
 	}
 
 	@Override
@@ -421,7 +447,7 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 		return new IOSDisplayMode(getWidth(), getHeight(), config.preferredFramesPerSecond, bufferFormat.r + bufferFormat.g
 			+ bufferFormat.b + bufferFormat.a);
 	}
-	
+
 	@Override
 	public Monitor getPrimaryMonitor() {
 		return new IOSMonitor(0, 0, "Primary Monitor");
@@ -459,6 +485,14 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 
 	@Override
 	public void setTitle (String title) {
+	}
+
+	@Override
+	public void setUndecorated(boolean undecorated) {
+	}
+
+	@Override
+	public void setResizable(boolean resizable) {
 	}
 
 	@Override
@@ -517,7 +551,7 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 	public long getFrameId () {
 		return frameId;
 	}
-	
+
 	@Override
 	public Cursor newCursor (Pixmap pixmap, int xHotspot, int yHotspot) {
 		return null;
@@ -526,17 +560,17 @@ public class IOSGraphics extends NSObject implements Graphics, GLKViewDelegate, 
 	@Override
 	public void setCursor (Cursor cursor) {
 	}
-	
+
 	@Override
 	public void setSystemCursor (SystemCursor systemCursor) {
 	}
-	
+
 	private class IOSDisplayMode extends DisplayMode {
 		protected IOSDisplayMode (int width, int height, int refreshRate, int bitsPerPixel) {
 			super(width, height, refreshRate, bitsPerPixel);
 		}
 	}
-	
+
 	private class IOSMonitor extends Monitor {
 		protected IOSMonitor(int virtualX, int virtualY, String name) {
 			super(virtualX, virtualY, name);
